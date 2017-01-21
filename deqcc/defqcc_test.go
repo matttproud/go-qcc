@@ -2,11 +2,12 @@ package deqcc
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"testing"
 )
 
-var progs = flag.String("progs", "./progs.dat", "path of progs.dat")
+var progs = flag.String("progs", "testdata/progs.dat", "path of progs.dat")
 
 func TestOpenSmoke(t *testing.T) {
 	if *progs == "" {
@@ -17,7 +18,11 @@ func TestOpenSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if err := Open(f); err != nil {
+	p, err := Open(f)
+	if err != nil {
 		t.Fatal(err)
+	}
+	for i := 0; i < p.NumStrings(); i++ {
+		fmt.Println(p.String(i))
 	}
 }

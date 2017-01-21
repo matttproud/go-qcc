@@ -3,13 +3,37 @@ package deqcc
 import (
 	"bufio"
 	"encoding/binary"
-	"fmt"
 	"io"
 )
 
 type ProgramsReader struct {
 	Programs
 	io.ReaderAt
+}
+
+func (p *ProgramsReader) DumpStrings(sr *StringRepo) error {
+	var (
+		r = bufio.NewReader(io.NewSectionReader(p, int64(p.Strings.Offset), int64(p.Strings.Num)))
+		i int
+	)
+	for {
+		data, err := r.ReadBytes(0)
+		switch err {
+		case nil:
+			str := string(data)
+			str = str[:len(str)-1]
+			sr.Add(str, i)
+			i += len(data)
+		case io.EOF:
+			str := string(data)
+			str = str[:len(str)-1]
+			sr.Add(str, i)
+			return nil
+		default:
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *ProgramsReader) GetString(at int) (string, error) {
@@ -39,27 +63,117 @@ func (p *ProgramsReader) GetGlobalDefs() ([]Def, error) {
 	return defs, nil
 }
 
-func Open(r io.ReaderAt) error {
+func (p *ProgramsReader) GetGlobals() (*GlobalVars, error) {
+	var globals GlobalVars
+	r := io.NewSectionReader(p, int64(p.Globals.Offset), GlobalVarsSz)
+	if err := read(r, &globals); err != nil {
+		return nil, err
+	}
+	return &globals, nil
+}
+
+func (p *ProgramsReader) GetEvals() ([]Eval, error) {
+	evals := make([]Eval, p.Globals.Num)
+	r := io.NewSectionReader(p, int64(p.Globals.Offset), int64(p.Globals.Num)*EvalSz)
+	if err := read(r, evals); err != nil {
+		return nil, err
+	}
+	return evals, nil
+}
+
+type Value struct {
+	Immediate bool
+	Name      string
+	Type      Type
+	Data      Data
+}
+
+type Data interface {
+	Repr() string
+}
+
+type Program struct {
+	strings *StringRepo
+}
+
+func (p *Program) NumStrings() int                     { return p.strings.Num() }
+func (p *Program) String(i int) (string, bool)         { return p.strings.ById(i) }
+func (p *Program) StringByOffset(i int) (string, bool) { return p.strings.ByOffset(i) }
+
+type StringRepo struct {
+	strs    []string
+	strOffs map[int]int
+}
+
+func (r *StringRepo) Add(str string, offset int) {
+	if r.strOffs == nil {
+		r.strOffs = make(map[int]int)
+	}
+	i := len(r.strs)
+	r.strs = append(r.strs, str)
+	r.strOffs[offset] = i
+}
+
+func (r *StringRepo) Num() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.strs)
+}
+
+func (r *StringRepo) ById(i int) (string, bool) {
+	if r == nil || i < 0 || i >= len(r.strs) {
+		return "", false
+	}
+	return r.strs[i], true
+}
+
+func (r *StringRepo) ByOffset(i int) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	i, ok := r.strOffs[i]
+	if !ok {
+		return "", false
+	}
+	return r.strs[i], true
+}
+
+func Open(r io.ReaderAt) (*Program, error) {
 	var hdr Programs
 	{
 		r := io.NewSectionReader(r, 0, ProgramsSize)
 		if err := read(r, &hdr); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	pr := ProgramsReader{hdr, r}
-	defs, err := pr.GetGlobalDefs()
-	if err != nil {
-		return err
+	// defs, err := pr.GetGlobalDefs()
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// evals, err := pr.GetEvals()
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// for _, d := range defs {
+	// 	edef, err := NewEDef(d, &pr, evals)
+	// 	if edef != nil && err == nil {
+	// 		n, err := pr.GetString(int(edef.SName))
+	// 		if err != nil {
+	// 			return nil, err
+	// 		}
+	// 		fmt.Println(n, edef.Data)
+	// 	}
+	// }
+
+	p := Program{
+		strings: new(StringRepo),
 	}
-	for i, d := range defs {
-		n, err := pr.GetString(int(d.SName))
-		if err != nil {
-			return err
-		}
-		fmt.Printf("%v. %v (%v)\n", i, d, n)
+	if err := pr.DumpStrings(p.strings); err != nil {
+		return nil, err
 	}
-	return nil
+	return &p, nil
 }
 
 func read(r io.Reader, data interface{}) error { return binary.Read(r, binary.LittleEndian, data) }
